@@ -1,10 +1,41 @@
 local TextHelpers = {}
 
+---parse different variants of alpha like 80%, 80 or 0.8
+---@param parameter any
+---@param DEFAULT_ALPHA number
+---@return number
+function TextHelpers.parse_alpha_parameter(parameter, DEFAULT_ALPHA)
+  if not parameter or parameter == "" then
+    return DEFAULT_ALPHA
+  end
+
+  local text = parameter:match("^%s*(.-)%s*$")
+  text = text:gsub("%%$", "")
+
+  local value = tonumber(text)
+  if not value then
+    return -1
+  end
+
+  -- "80" means 80%, "0.8" means 0.8
+  if value > 1 then
+    value = value / 100
+  end
+
+  if value < 0 then
+    value = 0
+  elseif value > 1 then
+    value = 1
+  end
+
+  return value
+end
+
 ---Generates a 20-character fill bar for percent values 0..100
 ---@param percent number @expected 0 <= percent <= 100
 ---@return string
 function TextHelpers.make_fill_bar(percent)
---[[
+  --[[
 
 Examples:
     0   -> ░░░░░░░░░░░░░░░░░░░░
@@ -63,7 +94,7 @@ end
 ---Generates a formatted percentage string with a fixed width for percent values 0..100
 ---@param percent number @expected 0 <= percent <= 100
 ---@return string
-function TextHelpers.format_percent(percent)
+function TextHelpers.fixed_width_percent(percent)
   percent = math.floor(percent or 0)
 
   if percent < 0 then
@@ -100,37 +131,52 @@ end
 ---helper function to convert color channel to 0-255 scale if needed
 ---@param value any
 ---@param uses_255_scale boolean
+---@param alpha? number
 ---@return integer
-local function color_channel_to_255(value, uses_255_scale)
+local function color_channel_to_255(value, uses_255_scale, alpha)
   if value == nil then
     return 255
   end
-
-  if uses_255_scale then
-    return math.floor(value + 0.5)
+  if alpha == nil then
+    alpha = 1
   end
 
-  return math.floor(value * 255 + 0.5)
+  if uses_255_scale then
+    return math.floor(value * alpha + 0.5)
+  end
+
+  return math.floor(value * 255 * alpha + 0.5)
+end
+
+---takes a number and returns a two-digit hex string, rounding to the nearest integer
+---@param value number
+---@return string
+local function byte_to_hex(value)
+  return string.format("%02X", math.floor(value))
 end
 
 ---converts fluid color to r,g,b string
 ---@param fluid_name any
+---@param options table
 ---@return string
-function TextHelpers.get_fluid_rich_text_color(fluid_name)
+function TextHelpers.get_fluid_rich_text_color(fluid_name, options)
   local fluid = prototypes.fluid[fluid_name]
   local color = fluid and (fluid.base_color or fluid.flow_color)
+  local alpha = options and options.alpha
 
   if not color then
-    return "255, 255, 255"
+    return "#FFFFFFFF"
   end
 
   local uses_255_scale = color_uses_255_scale(color)
 
-  local r = color_channel_to_255(color.r or color[1], uses_255_scale)
-  local g = color_channel_to_255(color.g or color[2], uses_255_scale)
-  local b = color_channel_to_255(color.b or color[3], uses_255_scale)
+  -- Factorio rich text alpha expects premultiplied RGB.
+  local a = color_channel_to_255(alpha, false)
+  local r = color_channel_to_255(color.r or color[1], uses_255_scale, alpha)
+  local g = color_channel_to_255(color.g or color[2], uses_255_scale, alpha)
+  local b = color_channel_to_255(color.b or color[3], uses_255_scale, alpha)
 
-  return r .. ", " .. g .. ", " .. b
+  return "#" .. byte_to_hex(a) .. byte_to_hex(r) .. byte_to_hex(g) .. byte_to_hex(b)
 end
 
 return TextHelpers

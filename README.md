@@ -11,7 +11,7 @@ Run one command and the mod generates a blueprint book containing one blueprint 
 - Generates a blueprint book in-game from the currently loaded fluid prototypes.
 - Creates one display-panel blueprint per visible, non-parameter fluid.
 - Uses translated fluid names for blueprint labels when available.
-- Colors each progress bar from the fluid prototype color.
+- Colors each progress bar from the fluid prototype color with a user-defined opacity (default 75%)
 - Keeps large generated books usable with Factorio's blueprint-book search. Press `CTRL+F` while browsing the book to find a fluid.
 - Works with modded fluids because generation happens at runtime in the current save.
 
@@ -20,7 +20,7 @@ Run one command and the mod generates a blueprint book containing one blueprint 
 Open the console and run:
 
 ```text
-/fluidmeter-book
+/fluidmeter-book [opacity]
 ```
 
 The mod requests localized fluid names first. For large modpacks this can take a short moment; the blueprint book is created in your cursor when the translations finish.
@@ -58,10 +58,10 @@ This is useful for large modpacks. Pyanodons, for example, has hundreds of fluid
 ## Commands
 
 ```text
-/fluidmeter-book
+/fluidmeter-book [opacity]
 ```
 
-Create a fluidmeter blueprint book in your cursor.
+Create a fluidmeter blueprint book in your cursor. Parameter opacity is optional and defaults to 75%. It can be given in the following formats: 0.75 or 75 or 75%
 
 ```text
 /fluidmeter-reset
