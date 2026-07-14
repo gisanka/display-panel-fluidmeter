@@ -1,182 +1,106 @@
 local TextHelpers = {}
 
----parse different variants of alpha like 80%, 80 or 0.8
+---Sanitizes the alpha parameter.
+---@param alpha_param string
+---@return number|nil
+local function sanitize_alpha_parameter(alpha_param)
+  -- remove the optional %
+  alpha_param = alpha_param:gsub("%%$", "")
+  alpha = tonumber(alpha_param)
+
+  -- failsafe if conversion fails
+  if not alpha then
+    return nil
+  end
+
+  if alpha > 100 then -- If alpha is greater than 100%
+    alpha = 100
+  elseif alpha < 0 then -- Pure failsafe; our pattern matcher prevents negative numbers anyway
+    alpha = 0
+  end
+
+  -- "80" represents 80% => 0.8, "0.8" remains 0.8
+  if alpha > 1 then
+    alpha = alpha / 100
+  end
+
+  return alpha
+end
+
+---parse numerical parameters alpha and width
 ---@param parameter any
----@param DEFAULT_ALPHA number
----@return number
-function TextHelpers.parse_alpha_parameter(parameter, DEFAULT_ALPHA)
+---@return table
+function TextHelpers.parse_numerical_parameter(parameter)
   if not parameter or parameter == "" then
-    return DEFAULT_ALPHA
+    return { alpha = nil, width = nil }
   end
 
-  local text = parameter:match("^%s*(.-)%s*$")
-  text = text:gsub("%%$", "")
+  -- Pure patterns without anchors
+  local raw_width = "%d+"
+  local raw_alpha_a = "0?%.%d+"
+  local raw_alpha_b = "%d+%%?"
 
-  local value = tonumber(text)
-  if not value then
-    return -1
+  local pattern_width_name = "width"
+  local pattern_alpha_name = "opacity"
+
+  -- Step 1: Collect all space-separated tokens
+  local tokens = {}
+  for token in parameter:gmatch("%S+") do
+    table.insert(tokens, token)
   end
 
-  -- "80" means 80%, "0.8" means 0.8
-  if value > 1 then
-    value = value / 100
+  -- Step 2: Extract values by searching for Keywords FIRST
+  local alpha_str, width_str = nil, nil
+  local unassigned_tokens = {}
+
+  for _, token in ipairs(tokens) do
+    if token:match("^" .. pattern_width_name .. "=" .. raw_width .. "$") then
+      width_str = token:match(raw_width)
+    elseif token:match("^" .. pattern_alpha_name .. "=" .. raw_alpha_a .. "$") then
+      alpha_str = token:match(raw_alpha_a)
+    elseif token:match("^" .. pattern_alpha_name .. "=" .. raw_alpha_b .. "$") then
+      alpha_str = token:match(raw_alpha_b)
+    else
+      -- If it's not a keyword, we save it for positional matching
+      table.insert(unassigned_tokens, token)
+    end
   end
 
-  if value < 0 then
-    value = 0
-  elseif value > 1 then
-    value = 1
+  -- Step 3: Handle positional pure numbers if keywords weren't used
+  -- This preserves your original exact 4-case logic if the user just types numbers
+  local positional_index = 1
+
+  -- If width keyword wasn't used, look at the positional tokens
+  if not width_str then
+    for i = positional_index, #unassigned_tokens do
+      local token = unassigned_tokens[i]
+      if token:match("^" .. raw_width .. "$") then
+        width_str = token
+        positional_index = i + 1
+        break
+      end
+    end
   end
 
-  return value
-end
-
----Generates a 20-character fill bar for percent values 0..100
----@param percent number @expected 0 <= percent <= 100
----@return string
-function TextHelpers.make_fill_bar(percent)
-  --[[
-
-Examples:
-    0   -> ░░░░░░░░░░░░░░░░░░░░
-    1   -> ▎░░░░░░░░░░░░░░░░░░░
-    5   -> █░░░░░░░░░░░░░░░░░░░
-    50  -> ██████████░░░░░░░░░░
-    100 -> ████████████████████
-
-used blocks:
-    ░ = empty block U+2591 LIGHT SHADE
-    ▎ = 1/5 block  U+258E LEFT ONE QUARTER BLOCK
-    ▎ = 2/5 block  U+258C LEFT THREE EIGHTHS BLOCK
-    ▌ = 3/5 block   U+258B LEFT FIVE EIGHTHS BLOCK
-    ▊ = 4/5 block  U+258A LEFT THREE QUARTERS BLOCK
-    █ = full block  U+2588 FULL BLOCK
-
-]]
-
-  percent = math.floor(percent or 0)
-
-  if percent < 0 then
-    percent = 0
-  elseif percent > 100 then
-    percent = 100
+  -- If alpha keyword wasn't used, look at the remaining positional tokens
+  if not alpha_str then
+    for i = positional_index, #unassigned_tokens do
+      local token = unassigned_tokens[i]
+      if token:match("^" .. raw_alpha_a .. "$") or token:match("^" .. raw_alpha_b .. "$") then
+        alpha_str = token
+        break
+      end
+    end
   end
 
-  local width = 20
-  local full_blocks = math.floor(percent / 5)
-  local remainder = percent % 5
+  -- Step 4: Final validation and sanitization
+  -- If width_str exists, convert to number, otherwise it stays nil
+  local width = width_str and tonumber(width_str) or nil
 
-  local partial_blocks = {
-    [0] = "",
-    [1] = "▎",
-    [2] = "▌",
-    [3] = "▋",
-    [4] = "▊",
-  }
+  -- If alpha_str exists, sanitize it, otherwise it stays nil
+  local alpha = alpha_str and sanitize_alpha_parameter(alpha_str) or nil
 
-  if percent == 100 then
-    return string.rep("█", width)
-  end
-
-  local bar = string.rep("█", full_blocks)
-  bar = bar .. partial_blocks[remainder]
-
-  local used_width = full_blocks
-  if remainder > 0 then
-    used_width = used_width + 1
-  end
-
-  bar = bar .. string.rep("░", width - used_width)
-
-  return bar
-end
-
----Generates a formatted percentage string with a fixed width for percent values 0..100
----@param percent number @expected 0 <= percent <= 100
----@return string
-function TextHelpers.fixed_width_percent(percent)
-  percent = math.floor(percent or 0)
-
-  if percent < 0 then
-    percent = 0
-  elseif percent > 100 then
-    percent = 100
-  end
-
-  local figure_space = " "
-  local text = tostring(percent) .. "%"
-
-  if percent < 10 then
-    -- add two figure spaces for single-digit percentages
-    text = figure_space .. figure_space .. text
-  elseif percent < 100 then
-    -- add one figure space for double-digit percentages
-    text = figure_space .. text
-  end
-
-  return text
-end
-
----returns true if rgb is using 0 - 255 scale
----@param color any
----@return boolean
-local function color_uses_255_scale(color)
-  local r = color.r or color[1] or 0
-  local g = color.g or color[2] or 0
-  local b = color.b or color[3] or 0
-
-  return r > 1 or g > 1 or b > 1
-end
-
----helper function to convert color channel to 0-255 scale if needed
----@param value any
----@param uses_255_scale boolean
----@param alpha? number
----@return integer
-local function color_channel_to_255(value, uses_255_scale, alpha)
-  if value == nil then
-    return 255
-  end
-  if alpha == nil then
-    alpha = 1
-  end
-
-  if uses_255_scale then
-    return math.floor(value * alpha + 0.5)
-  end
-
-  return math.floor(value * 255 * alpha + 0.5)
-end
-
----takes a number and returns a two-digit hex string, rounding to the nearest integer
----@param value number
----@return string
-local function byte_to_hex(value)
-  return string.format("%02X", math.floor(value))
-end
-
----converts fluid color to r,g,b string
----@param fluid_name any
----@param options table
----@return string
-function TextHelpers.get_fluid_rich_text_color(fluid_name, options)
-  local fluid = prototypes.fluid[fluid_name]
-  local color = fluid and (fluid.base_color or fluid.flow_color)
-  local alpha = options and options.alpha
-
-  if not color then
-    return "#FFFFFFFF"
-  end
-
-  local uses_255_scale = color_uses_255_scale(color)
-
-  -- Factorio rich text alpha expects premultiplied RGB.
-  local a = color_channel_to_255(alpha, false)
-  local r = color_channel_to_255(color.r or color[1], uses_255_scale, alpha)
-  local g = color_channel_to_255(color.g or color[2], uses_255_scale, alpha)
-  local b = color_channel_to_255(color.b or color[3], uses_255_scale, alpha)
-
-  return "#" .. byte_to_hex(a) .. byte_to_hex(r) .. byte_to_hex(g) .. byte_to_hex(b)
+  return { alpha = alpha, width = width }
 end
 
 return TextHelpers

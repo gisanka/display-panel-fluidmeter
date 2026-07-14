@@ -1,64 +1,15 @@
 local TextHelpers = require("scripts.text_helpers")
+local DisplayPanelApi = require("__display-panel__.public_api")
 
 local DEFAULT_ALPHA = 0.75
+local DEFAULT_WIDTH = 7
 
----create localization structure
----@return table
-local function create_localization_structure()
-  return {
-    pending = false,
-    remaining = 0,
-    localization_requests = {},
-    translated_names = {},
-    generation_options = nil,
-  }
-end
+---@alias PrototypeName string
 
----to be used for resetting localization
-local function reset_localization()
-  storage.fluidmeter_localization = {}
-end
-
----localization access wrapper
----@param player_index any
----@param create_if_missing any
----@return table|unknown
-local function access_localization(player_index, create_if_missing)
-  if not storage.fluidmeter_localization then
-    if create_if_missing then
-      storage.fluidmeter_localization = {}
-    else
-      return nil
-    end
-  end
-
-  if not storage.fluidmeter_localization[player_index] and create_if_missing then
-    storage.fluidmeter_localization[player_index] = create_localization_structure()
-  end
-
-  return storage.fluidmeter_localization[player_index]
-end
-
----failsafe command to reset localization state for a player
-local function reset_localization_requests(command)
-  if not command.player_index then
-    return
-  end
-
-  local localization = access_localization(command.player_index)
-  if not localization then
-    return
-  end
-
-  localization.pending = false
-  localization.remaining = 0
-  localization.localization_requests = {}
-
-  local player = game.get_player(command.player_index)
-  if player then
-    player.print("Display panel fluidmeter localization state reset.")
-  end
-end
+---@class GenerationOptions
+---@field alpha number
+---@field width integer
+---@field force_rainbow_fallback boolean
 
 ---adds type fluid for signals (if not specified, it is seen as item signal)
 ---@param fluid_name any
@@ -70,33 +21,19 @@ local function fluid_signal(fluid_name)
   }
 end
 
----filters out hidden fluids and blueprint parameters
----@param fluid any
+---------------------------------------------------------------------------------------------------
+
+---filters out hidden entities and blueprint parameters
+---@param prototype any
 ---@return boolean
-local function is_real_fluid(fluid)
-  return fluid and fluid.valid and not fluid.hidden and not fluid.parameter
+local function is_real(prototype)
+  return prototype and prototype.valid and not prototype.hidden and not prototype.parameter
 end
 
 ---make sure current modpack has display-panel prototypes
----@return unknown
+---@return boolean
 local function has_display_panel_prototypes()
   return prototypes.entity["display-panel"] and prototypes.item["display-panel"]
-end
-
----sort prototype_names by translated_names inplace
----@param prototype_names any
----@param translated_names any
-local function sort_names_by_translation(prototype_names, translated_names)
-  table.sort(prototype_names, function(a, b)
-    local translated_a = translated_names[a] or a
-    local translated_b = translated_names[b] or b
-
-    if translated_a == translated_b then
-      return a < b
-    end
-
-    return translated_a < translated_b
-  end)
 end
 
 ---get sorted table of fluid names
@@ -105,7 +42,7 @@ local function get_sorted_fluid_names()
   local names = {}
 
   for name, fluid in pairs(prototypes.fluid) do
-    if is_real_fluid(fluid) then
+    if is_real(fluid) then
       table.insert(names, name)
     end
   end
@@ -114,218 +51,70 @@ local function get_sorted_fluid_names()
   return names
 end
 
----fills in the actual displayed bar with the percentage
----output has fixed width so that on zooming out it will stay aligned
----@param fluid_name any
----@param percent any
----@param options table
----@return string
-local function display_panel_text(fluid_name, percent, options)
-  local color = TextHelpers.get_fluid_rich_text_color(fluid_name, options)
-  local bar = TextHelpers.make_fill_bar(percent)
-  local percent_text = TextHelpers.fixed_width_percent(percent)
+---------------------------------------------------------------------------------------------------
 
-  return "[font=default]"
-    .. "[color="
-    .. color
-    .. "]"
-    .. "[fluid="
-    .. fluid_name
-    .. "] "
-    .. bar
-    .. " [/color] "
-    .. percent_text
-    .. "[/font]"
-end
-
----add decision logic for the display panel which line to show
----@param fluid_name any
----@param options table
----@return table
-local function display_panel_parameters(fluid_name, options)
-  local parameters = {}
-
-  for percent = 0, 100 do
-    local comparator = "≤"
-    -- skipping 49 as it is negligible (and we only have 100 entries available)
-    if percent ~= 49 then
-      if percent == 100 then
-        comparator = "≥"
-      end
-
-      table.insert(parameters, {
-        icon = {
-          type = "fluid",
-          name = fluid_name,
-        },
-        text = display_panel_text(fluid_name, percent, options),
-        condition = {
-          first_signal = {
-            type = "fluid",
-            name = fluid_name,
-          },
-          comparator = comparator,
-          constant = percent,
-        },
-      })
-    end
-  end
-
-  return parameters
-end
-
----adds general data for the display panel entity
----@param fluid_name any
----@param options table
----@return table
-local function display_panel_entity(fluid_name, options)
-  return {
-    {
-      entity_number = 1,
-      name = "display-panel",
-      position = {
-        x = 0,
-        y = 0,
-      },
-      direction = 8,
-      control_behavior = {
-        parameters = display_panel_parameters(fluid_name, options),
-      },
-      always_show = true,
-    },
-  }
-end
-
----adds blueprint for fluid_name to blueprint_stack, with label and description using translated_name
----@param blueprint_stack any
----@param fluid_name any
----@param translated_name any
----@param options table
-local function setup_fluidmeter_blueprint(blueprint_stack, fluid_name, translated_name, options)
-  -- first set blueprint entity
-  blueprint_stack.set_blueprint_entities(display_panel_entity(fluid_name, options))
-
-  -- After entity is set, label and description can be filled
-  blueprint_stack.label = translated_name
-  blueprint_stack.blueprint_description = "Fluidmeter for " .. translated_name
-
-  blueprint_stack.preview_icons = {
-    {
-      index = 1,
-      signal = fluid_signal(fluid_name),
-    },
-  }
-end
-
----Creates blueprint book and iterates over fluids to fill book
----@param player any
----@param translated_names any
----@param options table
-local function create_fluidmeter_book(player, translated_names, options)
+---Creates blueprint book and iterates over science packs to fill book
+---@param player LuaPlayer
+---@param generation_options GenerationOptions
+local function create_fluidmeter_book(player, generation_options)
   if not player or not player.valid then
     return
   end
 
-  if not player.clear_cursor() then
-    player.print("Could not clear cursor. Please call the command again with an empty cursor.")
-    return
+  --------------------------
+
+  -- 1. STAGE: Start a fresh book building session for this player in the Core Mod
+  -- This will trigger create_active_book_session_structure() and handle the 'or nil' state safely
+  remote.call("display_panel_book", "start", player.index)
+
+  -- 2. STAGE: Gather our specific science packs and queue them into the book
+  local prototype_names = get_sorted_fluid_names()
+
+  for i, prototype_name in ipairs(prototype_names) do
+    blueprints_created = i
+    local options = {
+      prototype = fluid_signal(prototype_name),
+      bar_width = generation_options.width,
+      alpha = generation_options.alpha,
+      icon = fluid_signal(prototype_name),
+    }
+    local panel_config = DisplayPanelApi.new_meter(options)
+
+    -- Add this specific page to the player's active session queue
+    remote.call("display_panel_book", "add", player.index, panel_config)
   end
 
-  local book = player.cursor_stack
-  if not book or not book.valid then
-    player.print("Could not access cursor stack. Please call the command again with an empty cursor.")
-    return
-  end
-
-  if not book.set_stack({ name = "blueprint-book", count = 1 }) then
-    player.print("Could not create blueprint book. Please call the command again with an empty cursor.")
-    return
-  end
-
-  local opacity_percent = options.alpha * 100
-  book.label = "Fluidmeter display panels (" .. opacity_percent .. "% opacity)"
-  book.blueprint_description = "Generated by display panel fluidmeter mod from current fluid prototypes."
-
-  book.preview_icons = {
+  local book_preview_icons = {
     {
       index = 1,
-      signal = {
-        type = "item",
-        name = "display-panel",
-      },
+      signal = { name = "display-panel" },
     },
   }
-
-  local book_inventory = book.get_inventory(defines.inventory.item_main)
-  if not book_inventory or not book_inventory.valid then
-    player.print("Could not access blueprint book inventory.")
-    return
+  for i = 1, math.min(3, #prototype_names) do
+    book_preview_icons[#book_preview_icons + 1] = {
+      index = i + 1,
+      signal = fluid_signal(prototype_names[i]),
+    }
   end
 
-  local fluid_names = get_sorted_fluid_names()
-  sort_names_by_translation(fluid_names, translated_names)
-  local created = 0
+  local opacity_percent = generation_options.alpha * 100
+  local options_output_string = "(bar width: " .. generation_options.width .. " | opacity: " .. opacity_percent .. "%)"
 
-  for _, fluid_name in ipairs(fluid_names) do
-    local before_count = #book_inventory
-    local inserted = book_inventory.insert({ name = "blueprint", count = 1 })
+  local book_label = "Fluidmeter display panels " .. options_output_string
+  local book_description = "Generated by display panel fluidmeter mod from current fluid prototypes."
 
-    if inserted == 1 then
-      local blueprint_stack = book_inventory[before_count + 1]
-      local translated_name = translated_names[fluid_name] or fluid_name
+  -- 3. STAGE: Finish the book session and deliver the physical item into the player's hand
+  local success =
+    remote.call("display_panel_book", "finish", player.index, book_label, book_description, book_preview_icons)
 
-      setup_fluidmeter_blueprint(blueprint_stack, fluid_name, translated_name, options)
-      created = created + 1
-    else
-      player.print("Could not insert blueprint for " .. fluid_name)
-    end
-  end
-
-  player.print("Created fluid display book with " .. created .. " fluid blueprints and " .. opacity_percent .. "% opacity.")
-end
-
----request missing translations for fluids or create blueprint book when all translations are already received
----@param player any
----@param alpha number
-local function handle_fluid_translations(player, alpha)
-  local fluid_names = get_sorted_fluid_names()
-
-  local localization = access_localization(player.index, true)
-
-  if localization.pending then
-    player.print("Translation requests are still pending. The blueprint book will be created in your hand shortly.")
-    return
-  end
-
-  localization.localization_requests = {}
-  localization.remaining = 0
-  localization.generation_options = {
-    alpha = alpha,
-  }
-
-  for _, fluid_name in ipairs(fluid_names) do
-    if localization.translated_names[fluid_name] == nil then
-      -- request translation for this fluid
-      local fluid = prototypes.fluid[fluid_name]
-      local request_id = player.request_translation(fluid.localised_name)
-
-      if request_id then
-        localization.pending = true
-        localization.remaining = localization.remaining + 1
-        localization.localization_requests[request_id] = fluid_name
-      else
-        localization.translated_names[fluid_name] = fluid_name
-      end
-    end
-  end
-
-  if localization.remaining == 0 then
-    localization.pending = false
-    -- all translations were already available, create the blueprint book
-    create_fluidmeter_book(player, localization.translated_names, localization.generation_options)
-    return
+  if success then
+    player.print("Fluidmeter blueprint book generated and placed in your cursor!")
+  else
+    player.print("Failed to generate book. Ensure your science pack list is not empty.")
   end
 end
+
+---------------------------------------------------------------------------------------------------
 
 ---initiates process - sort-of-main()-function
 local function handle_book_command(command)
@@ -334,7 +123,7 @@ local function handle_book_command(command)
     return
   end
 
-  local player = game.get_player(command.player_index)
+  local player = game.players[command.player_index]
   if not player or not player.valid then
     return
   end
@@ -344,78 +133,43 @@ local function handle_book_command(command)
     return
   end
 
-  local alpha = TextHelpers.parse_alpha_parameter(command.parameter, DEFAULT_ALPHA)
+  local generation_options = TextHelpers.parse_numerical_parameter(command.parameter)
+  local defaults_used = {}
 
-  if alpha == -1 then
-    player.print(
-      "Invalid alpha value. Use for example /fluidmeter-book or /fluidmeter-book 75 or /fluidmeter-book 0.75."
-    )
-    return
+  -- If width was not provided or was invalid, fallback to default
+  if not generation_options.width then
+    generation_options.width = DEFAULT_WIDTH
+    table.insert(defaults_used, "width = " .. generation_options.width)
   end
 
-  handle_fluid_translations(player, alpha)
+  if generation_options.width > 24 then
+    generation_options.width = 24
+    player.print("Factorio only supports bars up to width 24")
+  end
+
+  -- If alpha was not provided or was invalid, fallback to default
+  if not generation_options.alpha then
+    generation_options.alpha = DEFAULT_ALPHA
+    table.insert(defaults_used, "alpha = " .. generation_options.alpha)
+  end
+
+  -- Print the message to the player if any defaults were applied
+  if #defaults_used > 0 then
+    local default_fallbacks = table.concat(defaults_used, " | ")
+    player.print("Using default values: " .. default_fallbacks)
+  end
+
+  -- Rainbow fallback flag (safe against nil command.parameter)
+  generation_options.force_rainbow_fallback = command.parameter and command.parameter:find("rainbow") ~= nil
+
+  create_fluidmeter_book(player, generation_options)
 end
 
--- stylua: ignore
--- add console command for main functionality
+---------------------------------------------------------------------------------------------------
+
+---add console command for main functionality
 commands.add_command(
   "fluidmeter-book",
-  "Create a blueprint book. Optionally specify alpha value for the bar color, e.g. 75 or 0.75.",
-  handle_book_command)
-
--- stylua: ignore
--- add failsafe console command to reset localization handling
-commands.add_command(
-  "fluidmeter-reset",
-  "Reset pending localization requests.",
-  reset_localization_requests)
-
----store localized names in volatile memory
----@param event EventData.on_string_translated
-script.on_event(defines.events.on_string_translated, function(event)
-  local localization = access_localization(event.player_index)
-
-  if not localization then
-    return
-  end
-
-  -- remember the translated name for the fluid
-  local fluid_name = localization.localization_requests[event.id]
-  if not fluid_name then
-    return
-  end
-
-  -- store localized name or fallback to untranslated name if translation failed
-  if event.translated then
-    localization.translated_names[fluid_name] = event.result
-  else
-    localization.translated_names[fluid_name] = fluid_name
-  end
-
-  -- remove the request from the pending list and decrement remaining count
-  localization.localization_requests[event.id] = nil
-  localization.remaining = localization.remaining - 1
-
-  if localization.remaining > 0 then
-    return
-  end
-
-  -- all translations have been received, create the blueprint book
-  localization.pending = false
-  localization.localization_requests = {}
-  localization.remaining = 0
-
-  local player = game.get_player(event.player_index)
-  create_fluidmeter_book(player, localization.translated_names, localization.generation_options)
-end)
-
----Throw away translated name when locale changed
----@param event EventData.on_player_locale_changed
-script.on_event(defines.events.on_player_locale_changed, function(event)
-  reset_localization()
-end)
-
----Throw away translated names when a mod was updated or removed
-script.on_configuration_changed(function(event)
-  reset_localization()
-end)
+  "Create a blueprint book. Optionally specify bar width and opacity with 'width=10 opacity=0.75",
+  handle_book_command
+)
