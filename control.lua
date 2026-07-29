@@ -10,7 +10,7 @@ local DEFAULT_WIDTH = 7
 ---@field force_rainbow_fallback boolean
 
 ---adds type fluid for signals (if not specified, it is seen as item signal)
----@param fluid_name any
+---@param fluid_name string
 ---@return table
 local function fluid_signal(fluid_name)
   return {
@@ -69,7 +69,6 @@ local function create_fluidmeter_book(player, generation_options)
   local prototype_names = get_sorted_fluid_names()
 
   for i, prototype_name in ipairs(prototype_names) do
-    blueprints_created = i
     local options = {
       prototype = fluid_signal(prototype_name),
       bar_width = generation_options.width,
@@ -114,7 +113,7 @@ end
 
 ---------------------------------------------------------------------------------------------------
 
----initiates process - sort-of-main()-function
+---initiating process of blueprint book generation
 local function handle_book_command(command)
   if not command.player_index then
     game.print("This command must be run by a player.")

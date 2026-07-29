@@ -6,7 +6,7 @@ local TextHelpers = {}
 local function sanitize_alpha_parameter(alpha_param)
   -- remove the optional %
   alpha_param = alpha_param:gsub("%%$", "")
-  alpha = tonumber(alpha_param)
+  local alpha = tonumber(alpha_param)
 
   -- failsafe if conversion fails
   if not alpha then
